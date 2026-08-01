@@ -1,0 +1,1 @@
+# bank-k8s-manifest
