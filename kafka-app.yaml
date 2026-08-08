@@ -85,9 +85,12 @@ spec:
             - name: CLUSTER_ID
               value: "MkU3OEVBNTcwNTJENDM2Qk"
 
+            - name: KAFKA_LOG_DIRS
+              value: "/mnt/kafka/data"
+              
           volumeMounts:
             - name: kafka-data
-              mountPath: /tmp/kraft-combined-logs
+              mountPath: /mnt/kafka
 
   volumeClaimTemplates:
     - metadata:
@@ -95,7 +98,7 @@ spec:
       spec:
         accessModes:
           - ReadWriteOnce
-        storageClassName: gp3
+        storageClassName: gp2
         resources:
           requests:
             storage: 20Gi
