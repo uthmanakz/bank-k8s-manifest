@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: user-service-sa
+  namespace: bank
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: user-service-secrets
+  namespace: bank
+spec:
+  provider: aws
+  parameters:
+    region: eu-west-2
+    usePodIdentity: "true"
+    objects: |
+      - objectName: "banking-app/database"
+        objectType: "secretsmanager"
+        jmesPath:
+          - path: "POSTGRES_USER"
+            objectAlias: "POSTGRES_USER"
+          - path: "POSTGRES_PASSWORD"
+            objectAlias: "POSTGRES_PASSWORD"
+          - path: "POSTGRES_DB"
+            objectAlias: "POSTGRES_DB"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: bank
+spec:
+  type: ClusterIP
+
+  selector:
+    app: user-service
+
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: bank
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: user-service
+
+  template:
+    metadata:
+      labels:
+        app: user-service
+
+    spec:
+      serviceAccountName: user-service-sa
+
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+
+              echo "PostgreSQL is ready"
+
+      containers:
+        - name: user-service
+          image: 476114152571.dkr.ecr.eu-west-2.amazonaws.com/user-service:v1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8000
+
+          env:
+            - name: FRONTEND_ORIGIN
+              value: "http://tb-bank.duckdns:3000"
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export POSTGRES_USER="$(cat /mnt/secrets/POSTGRES_USER)"
+              export POSTGRES_PASSWORD="$(cat /mnt/secrets/POSTGRES_PASSWORD)"
+              export POSTGRES_DB="$(cat /mnt/secrets/POSTGRES_DB)"
+
+              export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+
+              exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+          volumeMounts:
+            - name: user-service-secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 12
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+      volumes:
+        - name: user-service-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: user-service-secrets
