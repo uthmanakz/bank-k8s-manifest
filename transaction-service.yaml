@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: transaction-service-sa
+  namespace: bank
+
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: transaction-service-secrets
+  namespace: bank
+spec:
+  provider: aws
+  parameters:
+    region: eu-west-2
+    usePodIdentity: "true"
+    objects: |
+      - objectName: "banking-app/database"
+        objectType: "secretsmanager"
+        jmesPath:
+          - path: "POSTGRES_USER"
+            objectAlias: "POSTGRES_USER"
+          - path: "POSTGRES_PASSWORD"
+            objectAlias: "POSTGRES_PASSWORD"
+          - path: "POSTGRES_DB"
+            objectAlias: "POSTGRES_DB"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  namespace: bank
+spec:
+  type: ClusterIP
+  selector:
+    app: transaction-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  namespace: bank
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: transaction-service
+
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+
+    spec:
+      serviceAccountName: transaction-service-sa
+
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is reachable"
+
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 29092; do
+                echo "Waiting for Kafka..."
+                sleep 2
+              done
+              echo "Kafka is reachable"
+
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z redis 6379; do
+                echo "Waiting for Redis..."
+                sleep 2
+              done
+              echo "Redis is reachable"
+
+      containers:
+        - name: transaction-service
+          image: 476114152571.dkr.ecr.eu-west-2.amazonaws.com/transaction-service:v1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          env:
+            - name: SPRING_JPA_HIBERNATE_DDL_AUTO
+              value: "update"
+
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+
+            - name: REDIS_HOST
+              value: "redis"
+
+            - name: REDIS_PORT
+              value: "6379"
+
+            - name: SERVER_PORT
+              value: "8080"
+
+            - name: FRONTEND_ORIGIN
+              value: "http://tb-bank.duckdns:3000"
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export SPRING_DATASOURCE_USERNAME="$(cat /mnt/secrets/POSTGRES_USER)"
+              export SPRING_DATASOURCE_PASSWORD="$(cat /mnt/secrets/POSTGRES_PASSWORD)"
+              export POSTGRES_DB="$(cat /mnt/secrets/POSTGRES_DB)"
+
+              export SPRING_DATASOURCE_URL="jdbc:postgresql://postgres:5432/${POSTGRES_DB}"
+
+              exec java -jar app.jar
+
+          volumeMounts:
+            - name: transaction-service-secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 12
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+      volumes:
+        - name: transaction-service-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: transaction-service-secrets
