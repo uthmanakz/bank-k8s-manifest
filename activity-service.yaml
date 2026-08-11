@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: activity-service-sa
+  namespace: bank
+
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: activity-service-secrets
+  namespace: bank
+spec:
+  provider: aws
+  parameters:
+    region: eu-west-2
+    usePodIdentity: "true"
+    objects: |
+      - objectName: "banking-app/database"
+        objectType: "secretsmanager"
+        jmesPath:
+          - path: "POSTGRES_USER"
+            objectAlias: "POSTGRES_USER"
+          - path: "POSTGRES_PASSWORD"
+            objectAlias: "POSTGRES_PASSWORD"
+          - path: "POSTGRES_DB"
+            objectAlias: "POSTGRES_DB"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: activity-service
+  namespace: bank
+spec:
+  type: ClusterIP
+  selector:
+    app: activity-service
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: activity-service
+  namespace: bank
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: activity-service
+
+  template:
+    metadata:
+      labels:
+        app: activity-service
+
+    spec:
+      serviceAccountName: activity-service-sa
+
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 2
+              done
+              echo "PostgreSQL is reachable"
+
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 29092; do
+                echo "Waiting for Kafka..."
+                sleep 2
+              done
+              echo "Kafka is reachable"
+
+      containers:
+        - name: activity-service
+          image: 476114152571.dkr.ecr.eu-west-2.amazonaws.com/activity-service:v1
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8001
+
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:29092"
+
+            - name: FRONTEND_ORIGIN
+              value: "http://tb-bank.duckdns:3000"
+
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export POSTGRES_USER="$(cat /mnt/secrets/POSTGRES_USER)"
+              export POSTGRES_PASSWORD="$(cat /mnt/secrets/POSTGRES_PASSWORD)"
+              export POSTGRES_DB="$(cat /mnt/secrets/POSTGRES_DB)"
+
+              export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+
+              exec uvicorn app.main:app --host 0.0.0.0 --port 8001
+
+          volumeMounts:
+            - name: activity-service-secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            periodSeconds: 5
+            failureThreshold: 12
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+      volumes:
+        - name: activity-service-secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: activity-service-secrets
