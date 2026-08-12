@@ -1,0 +1,91 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bank-ingress
+  namespace: bank
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+
+    alb.ingress.kubernetes.io/transforms.user-service: >
+      [
+        {
+          "type": "url-rewrite",
+          "urlRewriteConfig": {
+            "rewrites": [
+              {
+                "regex": "^/api/users(.*)$",
+                "replace": "/users$1"
+              }
+            ]
+          }
+        }
+      ]
+
+    alb.ingress.kubernetes.io/transforms.transaction-service: >
+      [
+        {
+          "type": "url-rewrite",
+          "urlRewriteConfig": {
+            "rewrites": [
+              {
+                "regex": "^/api/transactions(.*)$",
+                "replace": "/transactions$1"
+              }
+            ]
+          }
+        }
+      ]
+
+    alb.ingress.kubernetes.io/transforms.activity-service: >
+      [
+        {
+          "type": "url-rewrite",
+          "urlRewriteConfig": {
+            "rewrites": [
+              {
+                "regex": "^/api/activities(.*)$",
+                "replace": "/activities$1"
+              }
+            ]
+          }
+        }
+      ]
+
+spec:
+  ingressClassName: alb
+
+  rules:
+    - http:
+        paths:
+          - path: /api/users
+            pathType: Prefix
+            backend:
+              service:
+                name: user-service
+                port:
+                  number: 8000
+
+          - path: /api/transactions
+            pathType: Prefix
+            backend:
+              service:
+                name: transaction-service
+                port:
+                  number: 8080
+
+          - path: /api/activities
+            pathType: Prefix
+            backend:
+              service:
+                name: activity-service
+                port:
+                  number: 8001
+
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
