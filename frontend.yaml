@@ -2,11 +2,12 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: default
+  namespace: bank
   labels:
     app: frontend
+
 spec:
-  replicas: 2
+  replicas: 1
 
   selector:
     matchLabels:
@@ -20,55 +21,43 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: <YOUR_REGISTRY>/<YOUR_FRONTEND_IMAGE>:<TAG>
-          imagePullPolicy: Always
+          image: 476114152571.dkr.ecr.eu-west-2.amazonaws.com/bank-frontend:v1
 
           ports:
             - name: http
-              containerPort: 3000
-              protocol: TCP
-
-          env:
-            - name: NODE_ENV
-              value: "production"
-
-            - name: TRANSACTION_SERVICE_URL
-              value: "http://transaction-service:8080"
+              containerPort: 80
 
           resources:
             requests:
-              cpu: "100m"
-              memory: "128Mi"
+              cpu: "50m"
+              memory: "64Mi"
             limits:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: "200m"
+              memory: "128Mi"
 
           readinessProbe:
             httpGet:
               path: /
-              port: 3000
+              port: 80
             initialDelaySeconds: 5
             periodSeconds: 10
 
           livenessProbe:
             httpGet:
               path: /
-              port: 3000
-            initialDelaySeconds: 15
+              port: 80
+            initialDelaySeconds: 10
             periodSeconds: 20
-
-      # Uncomment if pulling from a private registry
-      # imagePullSecrets:
-      #   - name: registry-secret
 
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: default
+  namespace: bank
   labels:
     app: frontend
+
 spec:
   type: ClusterIP
 
@@ -78,5 +67,5 @@ spec:
   ports:
     - name: http
       port: 80
-      targetPort: 3000
+      targetPort: 80
       protocol: TCP
