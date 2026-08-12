@@ -63,7 +63,7 @@ spec:
 
         - name: postgres-init
           configMap:
-          name: postgres-init
+            name: postgres-init
 
   volumeClaimTemplates:
     - metadata:
